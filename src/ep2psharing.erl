@@ -1,16 +1,16 @@
 %%%-------------------------------------------------------------------
-%% @doc erlang_p2p_file_sharing public API
+%% @doc ep2psharing public API
 %% @end
 %%%-------------------------------------------------------------------
 
--module(erlang_p2p_file_sharing_app).
+-module(ep2psharing).
 
 -behaviour(application).
 
 -export([start/2, stop/1]).
 
 start(_StartType, _StartArgs) ->
-    erlang_p2p_file_sharing_sup:start_link().
+    ep2psharing_sup:start_link().
 
 stop(_State) ->
     ok.

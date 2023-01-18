@@ -1,8 +1,8 @@
-{application, erlang_p2p_file_sharing,
- [{description, "An OTP application"},
+{application, ep2psharing,
+ [{description, "Bittorrent-like protocol implementation on Erlang nodes"},
   {vsn, "0.1.0"},
   {registered, []},
-  {mod, {erlang_p2p_file_sharing_app, []}},
+  {mod, {ep2psharing_app, []}},
   {applications,
    [kernel,
     stdlib

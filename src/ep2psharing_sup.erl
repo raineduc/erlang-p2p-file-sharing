@@ -1,9 +1,9 @@
 %%%-------------------------------------------------------------------
-%% @doc erlang_p2p_file_sharing top level supervisor.
+%% @doc ep2psharing top level supervisor.
 %% @end
 %%%-------------------------------------------------------------------
 
--module(erlang_p2p_file_sharing_sup).
+-module(ep2psharing_sup).
 
 -behaviour(supervisor).
 
