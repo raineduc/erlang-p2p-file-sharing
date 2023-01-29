@@ -3,14 +3,14 @@
 %% @end
 %%%-------------------------------------------------------------------
 
--module(ep2psharing).
+-module(ep2psharing_app).
 
 -behaviour(application).
 
 -export([start/2, stop/1]).
 
 start(_StartType, _StartArgs) ->
-    ep2psharing_sup:start_link().
+    ep2psharing_peer_sup:start_link().
 
 stop(_State) ->
     ok.

@@ -1,15 +1,11 @@
-{application, ep2psharing,
+{application,
+ ep2psharing,
  [{description, "Bittorrent-like protocol implementation on Erlang nodes"},
   {vsn, "0.1.0"},
   {registered, []},
   {mod, {ep2psharing_app, []}},
-  {applications,
-   [kernel,
-    stdlib
-   ]},
-  {env,[]},
+  {applications, [kernel, stdlib]},
+  {env, []},
   {modules, []},
-
   {licenses, ["Apache-2.0"]},
-  {links, []}
- ]}.
+  {links, []}]}.
