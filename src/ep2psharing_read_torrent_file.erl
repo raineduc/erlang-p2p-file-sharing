@@ -35,12 +35,3 @@ parse_pieces_data(Data) ->
   <<Hash:20/binary, Rest/binary>> = Data,
   [Hash | parse_pieces_data(Rest)].
 
-start() ->
-  % read torrent file
-  Metainfo = read_torrent_file("test.torrent"),
-  % print info
-  io:format("Torrent file info:~n", []),
-  io:format("Name: ~p~n", [Metainfo#metainfo_info_field.name]),
-  io:format("Piece length: ~p~n", [Metainfo#metainfo_info_field.piece_len]),
-  io:format("Pieces: ~p~n", [Metainfo#metainfo_info_field.pieces]),
-  io:format("Length: ~p~n", [Metainfo#metainfo_info_field.length]).
