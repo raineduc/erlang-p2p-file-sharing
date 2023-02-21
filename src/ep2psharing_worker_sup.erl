@@ -26,5 +26,5 @@ init([]) ->
     {ok, {SupFlags, [LeecherSpecs]}}.
 
 start_leecher(DownloadRequest, ExistingPieces, File) ->
-    {ok, _} = supervisor:start_child(?MODULE, [DownloadRequest, ExistingPieces, File]),
-    ok.
+    {ok, Pid} = supervisor:start_child(?MODULE, [DownloadRequest, ExistingPieces, File]),
+    {ok, Pid}.

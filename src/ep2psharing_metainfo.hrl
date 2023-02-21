@@ -21,5 +21,8 @@
          %%  File's length in bytes
          length :: integer()}).
 %% Representation of metainfo (.torrent) file in Erlang record
--record(metainfo, {announce :: gen_server:server_ref(), info :: #metainfo_info_field{}}).
+-record(metainfo,
+        {announce :: gen_server:server_ref(),
+         info :: #metainfo_info_field{},
+         info_hash :: info_hash()}).
 -record(piece_entry, {index :: integer(), hash :: piece_hash()}).

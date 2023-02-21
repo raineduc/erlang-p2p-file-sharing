@@ -19,7 +19,9 @@
          filename :: file:name_all(),
          existent_pieces :: sets:set(piece_index()),
          interval :: integer()}).
--record(state, {current_torrents :: #{info_hash() => #torrent_info{}}}).
+-record(state,
+        {current_torrents :: #{info_hash() => #torrent_info{}},
+         leecher_processes :: #{info_hash() => gen_server:server_ref()}}).
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -34,6 +36,20 @@ init(_Args) ->
 handle_call(_Req, _From, State) ->
     {reply, ok, State}.
 
+handle_cast({handshake, Handshake = #handshake{info_hash = InfoHash}}, State) ->
+    #handshake{info_hash = InfoHash} = Handshake,
+    case maps:get(InfoHash, State#state.leecher_processes) of
+        {badkey, _} ->
+            {noreply, State};
+        LeecherRef ->
+            gen_server:cast(LeecherRef, {handshake, Handshake}),
+            {noreply, State}
+    end;
+handle_cast({reciprocal_handshake, Handshake}, State) ->
+    #handshake{info_hash = InfoHash} = Handshake,
+    LeecherRef = maps:get(InfoHash, State#state.leecher_processes),
+    gen_server:cast(LeecherRef, {reciprocal_handshake, Handshake}),
+    {noreply, State};
 handle_cast(_, State) ->
     {noreply, State}.
 
@@ -59,8 +75,21 @@ handle_info({torrent, Sender, DownloadRequest}, State) ->
             {noreply, State}
     end;
 handle_info({tracker_request, DownloadRequest, ExistingPieces, File}, State) ->
-    ep2psharing_worker_sup:start_leecher(DownloadRequest, ExistingPieces, File),
-    {noreply, State}.
+    #download_request{metainfo = MetaInfo, filename = Filename} = DownloadRequest,
+    #metainfo{announce = AnnounceRef, info_hash = InfoHash} = MetaInfo,
+    {ok, WorkerPid} =
+        ep2psharing_worker_sup:start_leecher(DownloadRequest, ExistingPieces, File),
+    TorrentInfo =
+        #torrent_info{announce = AnnounceRef,
+                      metainfo = MetaInfo,
+                      filename = Filename,
+                      existent_pieces = ExistingPieces},
+    NewState =
+        State#state{leecher_processes =
+                        maps:put(InfoHash, WorkerPid, State#state.leecher_processes),
+                    current_torrents =
+                        maps:put(InfoHash, TorrentInfo, State#state.current_torrents)},
+    {noreply, NewState}.
 
 %%%===================================================================
 %%% Internal functions
