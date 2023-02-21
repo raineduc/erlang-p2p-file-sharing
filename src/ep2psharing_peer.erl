@@ -103,7 +103,7 @@ open_binary_file(Filename) ->
             false ->
                 new
         end,
-    case file:open(Filename, [read, write, raw]) of
+    case file:open(Filename, [read, write]) of
         {ok, File} ->
             {ok, ExistentAtom, File};
         {error, Reason} ->
