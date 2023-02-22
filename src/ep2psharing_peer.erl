@@ -74,6 +74,7 @@ handle_info({torrent, Sender, DownloadRequest}, State) ->
             Sender ! {error, Reason},
             {noreply, State}
     end;
+
 handle_info({tracker_request, DownloadRequest, ExistingPieces, File}, State) ->
     #download_request{metainfo = MetaInfo, filename = Filename} = DownloadRequest,
     #metainfo{announce = AnnounceRef, info_hash = InfoHash} = MetaInfo,
@@ -103,7 +104,7 @@ open_binary_file(Filename) ->
             false ->
                 new
         end,
-    case file:open(Filename, [read, write]) of
+    case file:open(Filename, [read, write, binary]) of
         {ok, File} ->
             {ok, ExistentAtom, File};
         {error, Reason} ->
