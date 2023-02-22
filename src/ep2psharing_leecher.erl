@@ -250,8 +250,9 @@ handle_info({block_request_failed, #block_request{index = PieceIndex}, _Reason},
     NewPiecesSeeders = array:set(PieceIndex, {interested, PeerSet}, PiecesSeeders),
     {noreply, State#state{pieces_seeders = NewPiecesSeeders}};
 handle_info(receive_some_block_timeout, _State) ->
-    throw({receove_some_block_timeout,
-           "Block aggregator haven't received messages for a long time"});
+    {error,
+     {receove_some_block_timeout,
+      "Block aggregator haven't received messages for a long time"}};
 handle_info(_Info, State = #state{}) ->
     {noreply, State}.
 
