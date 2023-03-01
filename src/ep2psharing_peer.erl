@@ -31,18 +31,20 @@ start_link() ->
     gen_server:start_link({local, peer}, ?MODULE, [], []).
 
 init(_Args) ->
-    {ok, #state{}}.
+    wpool:start(),
+    {ok, #state{current_torrents = maps:new(), leecher_processes = maps:new()}}.
 
 handle_call(_Req, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({handshake, Handshake = #handshake{info_hash = InfoHash}}, State) ->
     #handshake{info_hash = InfoHash} = Handshake,
-    case maps:get(InfoHash, State#state.leecher_processes) of
-        {badkey, _} ->
+    case maps:is_key(InfoHash, State#state.leecher_processes) of
+        true ->
+            gen_server:cast(
+                maps:get(InfoHash, State#state.leecher_processes), {handshake, Handshake}),
             {noreply, State};
-        LeecherRef ->
-            gen_server:cast(LeecherRef, {handshake, Handshake}),
+        _ ->
             {noreply, State}
     end;
 handle_cast({reciprocal_handshake, Handshake}, State) ->
@@ -74,7 +76,6 @@ handle_info({torrent, Sender, DownloadRequest}, State) ->
             Sender ! {error, Reason},
             {noreply, State}
     end;
-
 handle_info({tracker_request, DownloadRequest, ExistingPieces, File}, State) ->
     #download_request{metainfo = MetaInfo, filename = Filename} = DownloadRequest,
     #metainfo{announce = AnnounceRef, info_hash = InfoHash} = MetaInfo,
@@ -121,8 +122,7 @@ get_and_validate_pieces([{Index, PieceHash} | Tail], PieceLen, File, ExistentPie
     case file:pread(File, (Index - 1) * PieceLen, PieceLen) of
         {ok, Data} ->
             Digest = crypto:hash(sha, Data),
-            DataHash = binary_to_list(Digest),
-            case {check_empty_piece(Data), string:equal(PieceHash, DataHash)} of
+            case {check_empty_piece(Data), Digest == PieceHash} of
                 {Cond1, _} when Cond1 ->
                     get_and_validate_pieces(Tail, PieceLen, File, ExistentPieces);
                 {_, Cond2} when Cond2 ->

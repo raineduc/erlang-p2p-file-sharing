@@ -35,7 +35,7 @@
                          undefined |
                          uninterested),
          distributed_file :: file:io_device(),
-         piece_request_worker_pool :: pid()}).
+         piece_request_worker_pool_name :: atom()}).
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -77,19 +77,24 @@ handle_cast({handshake,
                         peer_id = InitiatorRef,
                         socket = InitiatorSocket,
                         have = ExistingPieces}},
-            State = #state{peer_connections = PeerConnections, pieces_seeders = PiecesSeeders}) ->
+            State =
+                #state{peer_connections = PeerConnections,
+                       pieces_seeders = PiecesSeeders,
+                       pieces_presence = PiecesPresenceArray}) ->
     Connection =
         #peer_connection{state = handshaked,
                          peer_id = InitiatorRef,
                          socket = InitiatorSocket},
-    NewPeerConnections = maps:update(InitiatorRef, Connection, PeerConnections),
+    NewPeerConnections = maps:put(InitiatorRef, Connection, PeerConnections),
     NewPiecesSeeders =
         add_seeder_pieces(InitiatorRef, PiecesSeeders, sets:to_list(ExistingPieces)),
     gen_server:cast(InitiatorRef,
                     {reciprocal_handshake,
                      #handshake{info_hash = InfoHash,
                                 peer_id = {peer, node()},
-                                socket = {self(), node()}}}),
+                                socket = self(),
+                                have =
+                                    piece_presence_array_to_existing_pieces_set(PiecesPresenceArray)}}),
     {noreply,
      State#state{peer_connections = NewPeerConnections, pieces_seeders = NewPiecesSeeders}};
 handle_cast({reciprocal_handshake,
@@ -97,17 +102,18 @@ handle_cast({reciprocal_handshake,
                         socket = RespondentSocket,
                         have = ExistingPieces}},
             State = #state{peer_connections = PeerConnections, pieces_seeders = PiecesSeeders}) ->
-    case maps:get(RespondentId, PeerConnections) of
-        {badkey, _} ->
-            {noreply, State};
-        Connection ->
+    case maps:is_key(RespondentId, PeerConnections) of
+        true ->
+            Connection = maps:get(RespondentId, PeerConnections),
             HandshakedConnection =
                 Connection#peer_connection{state = handshaked, socket = RespondentSocket},
             NewPeerConnections = maps:update(RespondentId, HandshakedConnection, PeerConnections),
             NewPiecesSeeders =
                 add_seeder_pieces(RespondentId, PiecesSeeders, sets:to_list(ExistingPieces)),
             {noreply,
-             State#state{peer_connections = NewPeerConnections, pieces_seeders = NewPiecesSeeders}}
+             State#state{peer_connections = NewPeerConnections, pieces_seeders = NewPiecesSeeders}};
+        _ ->
+            {noreply, State}
     end;
 handle_cast({reciprocal_handshake, _Handshake}, State) ->
     {noreply, State};
@@ -119,7 +125,7 @@ handle_cast(_Request, State = #state{}) ->
     {noreply, State}.
 
 handle_info({tracker_request,
-             #download_request{metainfo = MetaInfo},
+             #download_request{metainfo = #metainfo{info_hash = InfoHash} = MetaInfo},
              ExistingPieces,
              File},
             State) ->
@@ -133,9 +139,11 @@ handle_info({tracker_request,
                         interval = Interval,
                         peers = Peers} ->
             PiecesPresenceArray =
-                existing_pieces_to_piece_presence_array(length(PieceHashes), ExistingPieces),
+                existing_pieces_set_to_piece_presence_array(length(PieceHashes), ExistingPieces),
             send_handshake_to_peers(MetaInfo, Peers, ExistingPieces),
             PeerConnections = create_requested_peer_connections(Peers),
+            WorkerPoolName = list_to_atom("request_workers_" ++ InfoHash),
+            wpool:start_pool(WorkerPoolName, [{workers, ?MAX_SIMULTANEOUS_PIECE_REQUESTS}]),
             self() ! leech_process,
             {noreply,
              State#state{peer_connections = PeerConnections,
@@ -144,9 +152,7 @@ handle_info({tracker_request,
                          pieces_presence = PiecesPresenceArray,
                          pieces_seeders = init_pieces_seeders_array(PiecesPresenceArray),
                          distributed_file = File,
-                         piece_request_worker_pool =
-                             wpool:start(request_workers,
-                                         [{workers, ?MAX_SIMULTANEOUS_PIECE_REQUESTS}])}};
+                         piece_request_worker_pool_name = WorkerPoolName}};
         #announce_reply{failure = _Reason} ->
             todo
     end;
@@ -154,6 +160,7 @@ handle_info(leech_process,
             State =
                 #state{pieces_seeders = PiecesSeeders,
                        distributed_file = File,
+                       piece_request_worker_pool_name = WorkerPoolName,
                        metainfo =
                            MetaInfo =
                                #metainfo{info =
@@ -164,21 +171,22 @@ handle_info(leech_process,
                    lists:enumerate(
                        array:to_list(PiecesSeeders))),
     case lists:nth(1, SortedByRarestPiece) of
-        uninterested ->
+        {_, uninterested} ->
             io:fwrite("File ~s successfully downloaded!", [FileName]),
             {noreply, State};
-        undefined ->
+        {_, undefined} ->
             io:fwrite("No suitable peers right now for later downloading"),
+            erlang:send_after(5000, self(), leech_process),
             {noreply, State};
-        {requested, _} ->
+        {_, {requested, _PeerSet}} ->
             erlang:send_after(500, self(), leech_process),
             {noreply, State};
-        {interested, _} ->
+        {_, {interested, _PeerSet}} ->
             %%    Take random of ?N_RAREST_PIECES, so peers don't request the same most rarest piece
             FirstRarestPieces =
                 lists:filter(fun(Elem) ->
                                 case Elem of
-                                    {interested, _} ->
+                                    {_, {interested, _}} ->
                                         true;
                                     _ ->
                                         false
@@ -186,19 +194,19 @@ handle_info(leech_process,
                              end,
                              lists:sublist(SortedByRarestPiece, ?N_RAREST_PIECES)),
             {PieceIndex, {interested, PeerSet}} = take_random_elem(FirstRarestPieces),
-            RandomPeer = take_random_elem(PeerSet),
+            RandomPeer = take_random_elem(sets:to_list(PeerSet)),
             NewPiecesSeeders = array:set(PieceIndex - 1, {requested, PeerSet}, PiecesSeeders),
             LeecherPid = self(),
             spawn(fun() ->
                      %%      Block offsets of piece
                      {FileOffsetToPiece, FileOffsetToNextPiece} =
                          {(PieceIndex - 1) * PieceLen, PieceIndex * PieceLen},
-                     BlockOffsets =
+                     FileOffsetsToBlockOffsets =
                          lists:seq(FileOffsetToPiece, FileOffsetToNextPiece, ?BLOCK_SIZE),
                      BlockLengths =
                          lists:map(fun(Offset) -> min(?BLOCK_SIZE, FileOffsetToNextPiece - Offset)
                                    end,
-                                   BlockOffsets),
+                                   FileOffsetsToBlockOffsets),
                      BlockAggregatorPid =
                          spawn(fun() ->
                                   block_aggregator(File,
@@ -208,22 +216,31 @@ handle_info(leech_process,
                                                    length(BlockLengths),
                                                    ?ZERO_BLOCK_COUNT)
                                end),
-                     lists:foreach(fun({Offset, Len}) ->
+                     lists:foreach(fun({FileOffsetToBlock, Len}) ->
                                       BlockRequest =
                                           #block_request{index = PieceIndex - 1,
-                                                         offset = Offset,
+                                                         offset =
+                                                             FileOffsetToBlock - FileOffsetToPiece,
                                                          length = Len},
-                                      wpool:send_request(request_workers,
-                                                         {ep2psharing_leecher,
-                                                          request_piece_block,
-                                                          [RandomPeer,
-                                                           BlockRequest,
-                                                           BlockAggregatorPid,
-                                                           State]},
-                                                         available_worker,
-                                                         ?POOL_OCCUPATION_TIMEOUT)
+                                      case wpool:send_request(WorkerPoolName,
+                                                              {ep2psharing_leecher,
+                                                               request_piece_block,
+                                                               [RandomPeer,
+                                                                BlockRequest,
+                                                                BlockAggregatorPid,
+                                                                State]},
+                                                              available_worker,
+                                                              ?POOL_OCCUPATION_TIMEOUT)
+                                      of
+                                          noproc ->
+                                              throw({noproc, "wpool can't find specified process"});
+                                          timeout ->
+                                              logger:error("Couldn't request wpool, timeout occured");
+                                          _ ->
+                                              ok
+                                      end
                                    end,
-                                   lists:zip(BlockOffsets, BlockLengths))
+                                   lists:zip(FileOffsetsToBlockOffsets, BlockLengths))
                   end),
             self() ! leech_process,
             {noreply, State#state{pieces_seeders = NewPiecesSeeders}}
@@ -251,7 +268,7 @@ handle_info({block_request_failed, #block_request{index = PieceIndex}, _Reason},
     {noreply, State#state{pieces_seeders = NewPiecesSeeders}};
 handle_info(receive_some_block_timeout, _State) ->
     {error,
-     {receove_some_block_timeout,
+     {receive_some_block_timeout,
       "Block aggregator haven't received messages for a long time"}};
 handle_info(_Info, State = #state{}) ->
     {noreply, State}.
@@ -311,8 +328,7 @@ block_aggregator(File,
 %%% Internal functions
 %%%===================================================================
 
-prepare_announce_request(#metainfo{info = InfoField}, ExistingPieces) ->
-    InfoHash = ep2psharing_bencoding:calc_info_field_hash(InfoField),
+prepare_announce_request(#metainfo{info_hash = InfoHash}, ExistingPieces) ->
     PeerRef = {peer, node()},
     #announce_request{info_hash = InfoHash,
                       node_id = PeerRef,
@@ -325,14 +341,14 @@ send_handshake_to_peers(#metainfo{info_hash = InfoHash}, Peers, ExistingPieces) 
                                      {handshake,
                                       #handshake{info_hash = InfoHash,
                                                  peer_id = {peer, node()},
-                                                 socket = {self(), node()},
+                                                 socket = self(),
                                                  have = ExistingPieces}})
                   end,
-                  Peers).
+                  sets:to_list(Peers)).
 
 send_have_to_peers(PeerConnectionMap, PieceIndex) ->
     HandshakedConnections =
-        lists:filter(fun(#peer_connection{socket = Socket}) -> not Socket == unhandshaked end,
+        lists:filter(fun(#peer_connection{socket = Socket}) -> not (Socket == unhandshaked) end,
                      maps:values(PeerConnectionMap)),
     HavePieceMessage = #have_piece{peer_id = {peer, node()}, index = PieceIndex},
     lists:foreach(fun(#peer_connection{socket = Socket}) ->
@@ -351,9 +367,18 @@ create_requested_peer_connections(Peers) ->
                   sets:to_list(Peers)),
     maps:from_list(Entries).
 
-existing_pieces_to_piece_presence_array(NumberOfPieces, ExistingPieces) ->
+existing_pieces_set_to_piece_presence_array(NumberOfPieces, ExistingPieces) ->
     array:map(fun(Index, _Elem) -> sets:is_element(Index + 1, ExistingPieces) end,
               array:new(NumberOfPieces)).
+
+piece_presence_array_to_existing_pieces_set(PresenceArray) ->
+    EnumeratedPresenceList =
+        lists:enumerate(
+            array:to_list(PresenceArray)),
+    ExistingPiecesList =
+        lists:filter(fun({_I, Exists}) -> Exists end, EnumeratedPresenceList),
+    sets:from_list(
+        lists:map(fun({I, _Exists}) -> I end, ExistingPiecesList)).
 
 init_pieces_seeders_array(PresenceArray) ->
     array:map(fun(_Index, Elem) ->
@@ -378,15 +403,15 @@ add_piece_seeder(PeerId, PieceIndex, PiecesSeeders) ->
     NewSeederSet =
         case SeederSet of
             {interested, Set} ->
-                sets:add_element(PeerId, Set);
+                {interested, sets:add_element(PeerId, Set)};
             {requested, Set} ->
-                sets:add_element(PeerId, Set);
+                {requested, sets:add_element(PeerId, Set)};
             undefined ->
                 {interested, sets:from_list([PeerId])};
             Any ->
                 Any
         end,
-    array:set(PieceIndex - 1, NewSeederSet, {interested, PiecesSeeders}).
+    array:set(PieceIndex - 1, NewSeederSet, PiecesSeeders).
 
 %% Order of terms: interested < requested < undefined < uninterested
 %% So, if the first element in sorted array is uninterested -> we have all pieces

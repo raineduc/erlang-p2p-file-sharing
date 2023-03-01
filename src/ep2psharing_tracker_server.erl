@@ -35,10 +35,8 @@ handle_call({announce, #announce_request{info_hash = InfoHash, node_id = NodeId}
     Reply =
         #announce_reply{failure = none,
                         interval = ?DEFAULT_INTERVAL,
-                        peers = Peers},
-    {reply, Reply, #state{peers_by_info_hash = NewPeerMap}};
-handle_call(ping, _From, State) ->
-    {reply, pong2, State}.
+                        peers = sets:del_element(NodeId, Peers)},
+    {reply, Reply, #state{peers_by_info_hash = NewPeerMap}}.
 
 handle_cast(_, State) ->
     {noreply, State}.
