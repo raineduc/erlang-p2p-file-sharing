@@ -154,7 +154,7 @@ handle_info({tracker_request,
                          distributed_file = File,
                          piece_request_worker_pool_name = WorkerPoolName}};
         #announce_reply{failure = _Reason} ->
-            todo
+            gen_server:stop(self(), {shutdown, tracker_unavailable}, 5000)
     end;
 handle_info(leech_process,
             State =
@@ -273,6 +273,8 @@ handle_info(receive_some_block_timeout, _State) ->
 handle_info(_Info, State = #state{}) ->
     {noreply, State}.
 
+terminate({shutdown, tracker_unavailable}, #state{metainfo = MetaInfo}) ->
+    gen_server:cast({peer, node()}, {tracker_unavailable, MetaInfo});
 terminate(_Reason, _State = #state{}) ->
     ok.
 
@@ -323,6 +325,7 @@ block_aggregator(File,
     after (?POOL_OCCUPATION_TIMEOUT + ?REQUEST_TIMEOUT) * 2 ->
         LeecherPid ! receive_some_block_timeout
     end.
+
 
 %%%===================================================================
 %%% Internal functions
