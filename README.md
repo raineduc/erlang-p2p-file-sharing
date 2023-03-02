@@ -117,7 +117,7 @@ ep2psharing_peer_sup:start_link().
 ep2psharing_peer:send_torrent_request(self(), DownloadRequest).
 ```
 
-__Пример загрузка файла__
+__Пример загрузки файла__
 
 Был запущен peer1@127.0.0.1, который в запросе указал готовый файл big.txt, соответственно peer1
 ничего не скачивает, а только раздает чанки.
