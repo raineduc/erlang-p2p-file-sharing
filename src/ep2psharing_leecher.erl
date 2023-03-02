@@ -38,6 +38,65 @@
          piece_request_worker_pool_name :: atom()}).
 
 %%%===================================================================
+%%% Internal API
+%%%===================================================================
+
+%% @doc Отправляет хендшейк со своими существующими частями файла peer-процессу на другой ноде
+-spec send_handshake(gen_server:server_ref(), info_hash(), sets:set(integer())) -> ok.
+send_handshake(PeerRef, InfoHash, ExistingPieces) ->
+    send_handshake(self(), PeerRef, InfoHash, ExistingPieces).
+
+-spec send_handshake(gen_server:server_ref(),
+                     gen_server:server_ref(),
+                     info_hash(),
+                     sets:set(integer())) ->
+                        ok.
+send_handshake(SenderRef, PeerRef, InfoHash, ExistingPieces) ->
+    gen_server:cast(PeerRef,
+                    {handshake,
+                     #handshake{info_hash = InfoHash,
+                                peer_id = {peer, node()},
+                                socket = SenderRef,
+                                have = ExistingPieces}}).
+
+%% @doc Отправляет ответный хендшейк
+-spec send_reciprocal_handshake(gen_server:server_ref(),
+                                info_hash(),
+                                sets:set(integer())) ->
+                                   ok.
+send_reciprocal_handshake(PeerRef, InfoHash, ExistingPieces) ->
+    send_reciprocal_handshake(self(), PeerRef, InfoHash, ExistingPieces).
+
+-spec send_reciprocal_handshake(gen_server:server_ref(),
+                                gen_server:server_ref(),
+                                info_hash(),
+                                sets:set(integer())) ->
+                                   ok.
+send_reciprocal_handshake(SenderRef, PeerRef, InfoHash, ExistingPieces) ->
+    gen_server:cast(PeerRef,
+                    {reciprocal_handshake,
+                     #handshake{info_hash = InfoHash,
+                                peer_id = {peer, node()},
+                                socket = SenderRef,
+                                have = ExistingPieces}}).
+
+%% @doc Сообщает другому сокету (т.е. лич-процессу) о том, что скачал и имеет в наличии чанк файла
+-spec send_have_msg(gen_server:server_ref(), have_piece()) -> ok.
+send_have_msg(Socket, HaveMsg) ->
+    gen_server:cast(Socket, {have_piece, HaveMsg}).
+
+%% @doc Запрашивает у сокета блок чанка файла
+-spec request_block(gen_server:server_ref(), block_request()) ->
+                       {block_reply, block_reply()} | {Reason :: atom(), Location :: term()}.
+request_block(Socket, BlockRequest) ->
+    gen_server:call(Socket, {block_request, BlockRequest}, ?REQUEST_TIMEOUT).
+
+%% @doc Отвечает на запрос блока
+-spec reply_with_block(gen_server:server_ref(), block_reply()) -> ok.
+reply_with_block(Socket, BlockReply) ->
+    gen_server:reply(Socket, {block_reply, BlockReply}).
+
+%%%===================================================================
 %%% Spawning and gen_server implementation
 %%%===================================================================
 
@@ -62,11 +121,10 @@ handle_call({block_request,
                  file:pread(File,
                             FileOffsetToPiece + PieceOffset,
                             min(BlockLen, PieceLen - PieceOffset)),
-             gen_server:reply(From,
-                              {block_reply,
-                               #block_reply{index = PieceIndex,
-                                            offset = PieceOffset,
-                                            block = Block}})
+             reply_with_block(From,
+                              #block_reply{index = PieceIndex,
+                                           offset = PieceOffset,
+                                           block = Block})
           end),
     {noreply, State};
 handle_call(_Request, _From, State = #state{}) ->
@@ -88,13 +146,9 @@ handle_cast({handshake,
     NewPeerConnections = maps:put(InitiatorRef, Connection, PeerConnections),
     NewPiecesSeeders =
         add_seeder_pieces(InitiatorRef, PiecesSeeders, sets:to_list(ExistingPieces)),
-    gen_server:cast(InitiatorRef,
-                    {reciprocal_handshake,
-                     #handshake{info_hash = InfoHash,
-                                peer_id = {peer, node()},
-                                socket = self(),
-                                have =
-                                    piece_presence_array_to_existing_pieces_set(PiecesPresenceArray)}}),
+    send_reciprocal_handshake(InitiatorRef,
+                              InfoHash,
+                              piece_presence_array_to_existing_pieces_set(PiecesPresenceArray)),
     {noreply,
      State#state{peer_connections = NewPeerConnections, pieces_seeders = NewPiecesSeeders}};
 handle_cast({reciprocal_handshake,
@@ -132,7 +186,7 @@ handle_info({tracker_request,
     #metainfo{announce = AnnounceRef, info = #metainfo_info_field{pieces = PieceHashes}} =
         MetaInfo,
     AnnounceRequest = prepare_announce_request(MetaInfo, ExistingPieces),
-    Reply = gen_server:call(AnnounceRef, {announce, AnnounceRequest}),
+    Reply = ep2psharing_tracker_server:send_announce_request(AnnounceRef, AnnounceRequest),
     io:write(Reply),
     case Reply of
         #announce_reply{failure = none,
@@ -154,7 +208,7 @@ handle_info({tracker_request,
                          distributed_file = File,
                          piece_request_worker_pool_name = WorkerPoolName}};
         #announce_reply{failure = _Reason} ->
-            todo
+            gen_server:stop(self(), {shutdown, tracker_unavailable}, 5000)
     end;
 handle_info(leech_process,
             State =
@@ -273,6 +327,8 @@ handle_info(receive_some_block_timeout, _State) ->
 handle_info(_Info, State = #state{}) ->
     {noreply, State}.
 
+terminate({shutdown, tracker_unavailable}, #state{metainfo = MetaInfo}) ->
+    gen_server:cast({peer, node()}, {tracker_unavailable, MetaInfo});
 terminate(_Reason, _State = #state{}) ->
     ok.
 
@@ -284,7 +340,7 @@ request_piece_block(PeerId,
                     BlockAggregatorPid,
                     #state{peer_connections = PeerConnections}) ->
     #peer_connection{socket = Socket} = maps:get(PeerId, PeerConnections),
-    case gen_server:call(Socket, {block_request, BlockRequest}, ?REQUEST_TIMEOUT) of
+    case request_block(Socket, BlockRequest) of
         {block_reply, BlockReply} ->
             BlockAggregatorPid ! {block_reply, BlockReply};
         {timeout, _Location} ->
@@ -336,14 +392,7 @@ prepare_announce_request(#metainfo{info_hash = InfoHash}, ExistingPieces) ->
                       downloaded = sets:size(ExistingPieces)}.
 
 send_handshake_to_peers(#metainfo{info_hash = InfoHash}, Peers, ExistingPieces) ->
-    lists:foreach(fun(Peer) ->
-                     gen_server:cast(Peer,
-                                     {handshake,
-                                      #handshake{info_hash = InfoHash,
-                                                 peer_id = {peer, node()},
-                                                 socket = self(),
-                                                 have = ExistingPieces}})
-                  end,
+    lists:foreach(fun(Peer) -> send_handshake(Peer, InfoHash, ExistingPieces) end,
                   sets:to_list(Peers)).
 
 send_have_to_peers(PeerConnectionMap, PieceIndex) ->
@@ -352,7 +401,7 @@ send_have_to_peers(PeerConnectionMap, PieceIndex) ->
                      maps:values(PeerConnectionMap)),
     HavePieceMessage = #have_piece{peer_id = {peer, node()}, index = PieceIndex},
     lists:foreach(fun(#peer_connection{socket = Socket}) ->
-                     gen_server:cast(Socket, {have_piece, HavePieceMessage})
+                     send_have_msg(Socket, HavePieceMessage)
                   end,
                   HandshakedConnections).
 
