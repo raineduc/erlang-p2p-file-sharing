@@ -52,11 +52,13 @@ handle_cast({reciprocal_handshake, Handshake}, State) ->
     LeecherRef = maps:get(InfoHash, State#state.leecher_processes),
     gen_server:cast(LeecherRef, {reciprocal_handshake, Handshake}),
     {noreply, State};
-handle_cast({tracker_unavailable, #metainfo{announce = Tracker, info_hash = InfoHash}}, State) ->
+handle_cast({tracker_unavailable, #metainfo{announce = Tracker, info_hash = InfoHash}},
+            State) ->
     logger:warning("Tracker ~s not available", Tracker),
     NewLeecherProcesses = maps:remove(InfoHash, State#state.leecher_processes),
     NewTorrents = maps:remove(InfoHash, State#state.current_torrents),
-    {noreply, State#state{leecher_processes = NewLeecherProcesses, current_torrents = NewTorrents}};
+    {noreply,
+     State#state{leecher_processes = NewLeecherProcesses, current_torrents = NewTorrents}};
 handle_cast(_, State) ->
     {noreply, State}.
 
