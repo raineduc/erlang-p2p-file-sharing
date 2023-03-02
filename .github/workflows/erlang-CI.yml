@@ -29,4 +29,4 @@ jobs:
 
       - name: Run tests
         working-directory: ${{github.workspace}}
-        run: rebar3 ct
+        run: rebar3 do eunit
