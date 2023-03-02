@@ -1,8 +1,3 @@
-%%%-------------------------------------------------------------------
-%% @doc ep2psharing top level supervisor.
-%% @end
-%%%-------------------------------------------------------------------
-
 -module(ep2psharing_peer_sup).
 
 -behaviour(supervisor).
