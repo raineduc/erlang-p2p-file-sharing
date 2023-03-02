@@ -12,6 +12,7 @@
 
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-export([send_torrent_request/2]).
 
 -record(torrent_info,
         {announce :: gen_server:server_ref(),
@@ -22,6 +23,17 @@
 -record(state,
         {current_torrents :: #{info_hash() => #torrent_info{}},
          leecher_processes :: #{info_hash() => gen_server:server_ref()}}).
+
+%%%===================================================================
+%%% Public API
+%%%===================================================================
+
+%% @doc Отпраляет пиру запрос на скачивание/раздачу торрента, входная точка для начала всего процесса
+%% по отдельному торренту
+-spec send_torrent_request(gen_server:server_ref(), download_request()) ->
+                              download_request().
+send_torrent_request(SenderRef, DownloadRequest) ->
+    peer ! {torrent, SenderRef, DownloadRequest}.
 
 %%%===================================================================
 %%% Spawning and gen_server implementation

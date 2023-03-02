@@ -43,3 +43,9 @@
          length :: integer()}).
 -record(block_reply, {index :: integer(), offset :: integer(), block :: binary()}).
 -record(have_piece, {peer_id :: gen_server:server_ref(), index :: integer()}).
+
+-type download_request() :: #download_request{}.
+-type block_reply() :: #block_reply{}.
+-type block_request() :: #block_request{}.
+-type have_piece() :: #have_piece{}.
+-type announce_request() :: #announce_request{}.

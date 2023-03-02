@@ -15,10 +15,25 @@
 %% API
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2]).
+-export([send_announce_request/2]).
 
 -define(DEFAULT_INTERVAL, 5).
 
 -record(state, {peers_by_info_hash :: #{info_hash() => peer_set()}}).
+
+%%%===================================================================
+%%% Public API
+%%%===================================================================
+
+%% @doc Запрашивает у трекера анонс по торренту - список пиров и мета-информацию о трекере
+-spec send_announce_request(gen_server:server_ref(), announce_request()) ->
+                               Reply :: term().
+send_announce_request(AnnounceRef, AnnounceRequest) ->
+    gen_server:call(AnnounceRef, {announce, AnnounceRequest}).
+
+%%%===================================================================
+%%% gen_server implementation
+%%%===================================================================
 
 start_link() ->
     gen_server:start_link({local, tracker_server}, ?MODULE, [], []).
